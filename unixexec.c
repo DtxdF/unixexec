@@ -30,6 +30,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#if defined(__FreeBSD__)
+#include <sys/ucred.h>
+#endif
+
 #include <pwd.h>
 
 #define UNIXEXEC_VERSION "0.2.1"
@@ -213,6 +217,7 @@ static int setremoteenv(int fd) {
   struct {
     uid_t uid;
     gid_t gid;
+    pid_t pid;
   } peer;
 #endif
 
@@ -222,15 +227,23 @@ static int setremoteenv(int fd) {
 
   if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &peerlen) == -1)
     return -1;
-
+#elif defined(__FreeBSD__)
+  struct xucred creds;
+  socklen_t credslen = sizeof(creds);
+  if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERCRED, &creds, &credslen) == -1)
+    return -1;
+  if (creds.cr_version != XUCRED_VERSION) {
+    errno = EINVAL;
+    return -1;
+  }
+  peer.uid = creds.cr_uid;
+  peer.gid = creds.cr_gid;
+  peer.pid = creds.cr_pid;
+#endif
   if (peer.pid > 0) {
     if (setenvuint("UNIXREMOTEPID", (unsigned)peer.pid) == -1)
       return -1;
   }
-#elif defined(__FreeBSD__)
-  if (getpeereid(fd, &peer.uid, &peer.gid) == -1)
-    return -1;
-#endif
 
   if (setenvuint("UNIXREMOTEEUID", peer.uid) == -1)
     return -1;

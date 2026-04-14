@@ -109,7 +109,7 @@ UNIXLOCALPID
 : process ID of unixexec process
 
 UNIXREMOTEPID
-: process ID of connecting process (support: Linux, OpenBSD)
+: process ID of connecting process
 
 UNIXREMOTEEUID
 : user ID of connecting process
