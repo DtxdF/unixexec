@@ -23,6 +23,9 @@
 #include <stdnoreturn.h>
 #include <string.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <bsd/unistd.h>
+#endif
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -42,6 +45,8 @@
 #define UNIX_PATH_MAX (sizeof(((struct sockaddr_un *)0)->sun_path))
 #endif
 
+#define DEFAULT_FILE_MODE "0750"
+
 extern char *__progname;
 
 typedef struct {
@@ -51,13 +56,14 @@ typedef struct {
 
 static const struct option long_options[] = {
     {"no-unlink", no_argument, NULL, 'U'},
+    {"mode", required_argument, NULL, 'm'},
     {"verbose", no_argument, NULL, 'v'},
     {"help", no_argument, NULL, 'h'},
     {NULL, 0, NULL, 0},
 };
 
 static int unixexec_listen(const unixexec_state_t *up, const char *path,
-                           size_t pathlen);
+                           size_t pathlen, mode_t mode);
 static int unixexec_unlink(const unixexec_state_t *up, const char *path);
 static int setlocalenv(const char *path);
 static int setremoteenv(int fd);
@@ -72,10 +78,15 @@ int main(int argc, char *argv[]) {
   socklen_t salen = sizeof(sa);
   const char *path;
   int ch;
+  mode_t mode;
+  mode_t *set;
 
   up.unlink = 1;
 
-  while ((ch = getopt_long(argc, argv, "+hUv", long_options, NULL)) != -1) {
+  if ((set = setmode(DEFAULT_FILE_MODE)) == NULL)
+    err(111, "setmode");
+
+  while ((ch = getopt_long(argc, argv, "+hUvm:", long_options, NULL)) != -1) {
     switch (ch) {
     case 'U':
       up.unlink = 0;
@@ -84,6 +95,14 @@ int main(int argc, char *argv[]) {
       up.verbose++;
       break;
     case 'h':
+      usage();
+      exit(2);
+      break;
+    case 'm':
+      free(set);
+      if ((set = setmode(optarg)) == NULL)
+        err(111, "setmode");
+      break;
     default:
       usage();
       exit(2);
@@ -100,7 +119,9 @@ int main(int argc, char *argv[]) {
 
   path = argv[0];
 
-  lfd = unixexec_listen(&up, path, strlen(path));
+  mode = getmode(set, 0);
+
+  lfd = unixexec_listen(&up, path, strlen(path), mode);
   if (lfd == -1)
     err(111, "listen: %s", path);
 
@@ -123,7 +144,7 @@ int main(int argc, char *argv[]) {
 }
 
 static int unixexec_listen(const unixexec_state_t *up, const char *path,
-                           size_t pathlen) {
+                           size_t pathlen, mode_t mode) {
   struct sockaddr_un sa = {0};
   size_t salen;
   int fd;
@@ -144,6 +165,9 @@ static int unixexec_listen(const unixexec_state_t *up, const char *path,
   salen = SUN_LEN(&sa);
 
   if (unixexec_unlink(up, path) == -1)
+    return -1;
+
+  if (fchmod(fd, mode) == -1)
     return -1;
 
   if (bind(fd, (struct sockaddr *)&sa, salen) == -1)
@@ -277,8 +301,9 @@ static void usage(void) {
       stderr,
       "%s [OPTION] <SOCKETPATH> <COMMAND> <...>\n"
       "version: %s\n"
-      "-U, --no-unlink           do not unlink the socket before binding\n"
-      "-v, --verbose             write additional messages to stderr\n"
-      "-h, --help                usage summary\n",
-      __progname, UNIXEXEC_VERSION);
+      "-U, --no-unlink              do not unlink the socket before binding\n"
+      "-v, --verbose                write additional messages to stderr\n"
+      "-h, --help                   usage summary\n"
+      "-m, --mode <mode>            Specify an alternate mode. (default=%s)\n",
+      __progname, UNIXEXEC_VERSION, DEFAULT_FILE_MODE);
 }

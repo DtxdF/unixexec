@@ -9,6 +9,12 @@ CFLAGS ?= -D_FORTIFY_SOURCE=2 -O2 -fstack-protector-strong \
           -fno-strict-aliasing
 LDFLAGS += -Wl,-z,relro,-z,now
 
+OS != uname -s
+
+.if ${OS} == Linux
+LDFLAGS += -lbsd
+.endif
+
 UNIXEXEC_CFLAGS ?= -g -Wall -Wextra -fwrapv
 
 CFLAGS += $(UNIXEXEC_CFLAGS)

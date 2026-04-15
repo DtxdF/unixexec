@@ -88,6 +88,9 @@ make
 -h, --help
 : usage summary
 
+-m, --mode
+: Specify an alternate mode. (default=0750)
+
 # ENVIRONMENT VARIABLES
 
 PROTO
