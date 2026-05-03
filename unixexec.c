@@ -17,6 +17,7 @@
 #include <arpa/inet.h>
 #include <err.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <netdb.h>
 #include <stdio.h>
@@ -54,6 +55,7 @@ typedef struct {
   int verbose;
   int unlink;
   int listen_mode;
+  struct stat sbuf;
 } unixexec_state_t;
 
 static const struct option long_options[] = {
@@ -68,7 +70,7 @@ static const struct option long_options[] = {
 
 static int unixexec_listen(const unixexec_state_t *up, const char *path,
                            size_t pathlen, mode_t mode);
-static int unixexec_connect(const char *path, size_t pathlen);
+static int unixexec_connect(const unixexec_state_t *up, const char *path, size_t pathlen);
 static int unixexec_unlink(const unixexec_state_t *up, const char *path);
 static int setlocalenv(const char *path);
 static int setremoteenv(int fd);
@@ -95,11 +97,11 @@ int main(int argc, char *argv[]) {
   while ((ch = getopt_long(argc, argv, "+clhUvm:", long_options, NULL)) != -1) {
     switch (ch) {
     case 'c':
-        up.listen_mode = 0;
-        break;
+      up.listen_mode = 0;
+      break;
     case 'l':
-        up.listen_mode = 1;
-        break;
+      up.listen_mode = 1;
+      break;
     case 'U':
       up.unlink = 0;
       break;
@@ -131,6 +133,15 @@ int main(int argc, char *argv[]) {
 
   path = argv[0];
 
+  if (stat(path, &up.sbuf) == -1) {
+    if (errno == ENOENT) {
+      if (!up.listen_mode)
+        err(111, "stat");
+    } else {
+      err(111, "stat");
+    }
+  }
+
   mode = getmode(set, 0);
 
   if (up.listen_mode) {
@@ -140,17 +151,18 @@ int main(int argc, char *argv[]) {
     fd = accept4(lfd, (struct sockaddr *)&sa, &salen, SOCK_CLOEXEC);
     if (fd == -1)
       err(111, "accept");
+    if (setremoteenv(fd) == -1)
+      err(111, "setremoteenv");
   } else {
-    lfd = unixexec_connect(path, strlen(path));
-    if (lfd == -1)
+    fd = unixexec_connect(&up, path, strlen(path));
+    if (fd == -1)
       err(111, "connect: %s", path);
+    if (S_ISSOCK(up.sbuf.st_mode) && setremoteenv(fd) == -1)
+      err(111, "setremoteenv");
   }
 
   if (setlocalenv(path) == -1)
     err(111, "setlocalenv");
-
-  if (setremoteenv(fd) == -1)
-    err(111, "setremoteenv");
 
   if ((dup2(fd, STDOUT_FILENO) == -1) || (dup2(fd, STDIN_FILENO) == -1))
     err(111, "dup2");
@@ -160,30 +172,39 @@ int main(int argc, char *argv[]) {
   err(errno == ENOENT ? 127 : 126, "%s", argv[1]);
 }
 
-static int unixexec_connect(const char *path, size_t pathlen) {
+static int unixexec_connect(const unixexec_state_t *up, const char *path, size_t pathlen) {
   struct sockaddr_un sa = {0};
   size_t salen;
   int fd;
 
-  if (pathlen >= UNIX_PATH_MAX) {
-    errno = ENAMETOOLONG;
-    return -1;
+  if (S_ISCHR(up->sbuf.st_mode)) {
+    fd = open(path, O_RDWR | O_CLOEXEC);
+
+    if (fd == -1)
+      return -1;
+    
+    return fd;
+  } else {
+    if (pathlen >= UNIX_PATH_MAX) {
+      errno = ENAMETOOLONG;
+      return -1;
+    }
+
+    fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+
+    if (fd == -1)
+      return -1;
+
+    sa.sun_family = AF_UNIX;
+
+    (void)memcpy(sa.sun_path, path, pathlen);
+    salen = SUN_LEN(&sa);
+
+    if (connect(fd, (struct sockaddr *)&sa, salen) == -1)
+      return -1;
+
+    return fd;
   }
-
-  fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-
-  if (fd == -1)
-    return -1;
-
-  sa.sun_family = AF_UNIX;
-
-  (void)memcpy(sa.sun_path, path, pathlen);
-  salen = SUN_LEN(&sa);
-
-  if (connect(fd, (struct sockaddr *)&sa, salen) == -1)
-    return -1;
-
-  return fd;
 }
 
 static int unixexec_listen(const unixexec_state_t *up, const char *path,
@@ -227,15 +248,10 @@ static int unixexec_listen(const unixexec_state_t *up, const char *path,
 }
 
 static int unixexec_unlink(const unixexec_state_t *up, const char *path) {
-  struct stat sb = {0};
-
   if (!up->unlink)
     return 0;
 
-  if (stat(path, &sb) == -1)
-    return (errno == ENOENT) ? 0 : -1;
-
-  if ((sb.st_mode & S_IFMT) != S_IFSOCK) {
+  if ((up->sbuf.st_mode & S_IFMT) != S_IFSOCK) {
     errno = ENOTSOCK;
     return -1;
   }
@@ -346,6 +362,7 @@ static void usage(void) {
       "version: %s\n"
       "-l, --listen                 listen mode. Default.\n"
       "-c, --connect                connect mode.\n"
+      "                             <SOCKETPATH> can be a socket or a character special file.\n"
       "-U, --no-unlink              (-l only). do not unlink the socket before binding\n"
       "-v, --verbose                write additional messages to stderr\n"
       "-h, --help                   usage summary\n"

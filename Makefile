@@ -22,7 +22,7 @@ LDFLAGS += $(UNIXEXEC_LDFLAGS)
 
 all: $(PROG)
 
-$(PROG):
+$(PROG): unixexec.c
 	$(CC) $(CFLAGS) -o $@ $@.c $(LDFLAGS)
 
 clean:
