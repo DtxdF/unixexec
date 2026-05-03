@@ -1,4 +1,5 @@
 /* Copyright (c) 2021-2023, Michael Santos <michael.santos@gmail.com>
+ * Copyright (c) 2026, Jesús Daniel Colmenares Oviedo <dtxdf@disroot.org>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
