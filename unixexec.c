@@ -52,9 +52,12 @@ extern char *__progname;
 typedef struct {
   int verbose;
   int unlink;
+  int listen_mode;
 } unixexec_state_t;
 
 static const struct option long_options[] = {
+    {"connect", no_argument, NULL, 'c'},
+    {"listen", no_argument, NULL, 'l'},
     {"no-unlink", no_argument, NULL, 'U'},
     {"mode", required_argument, NULL, 'm'},
     {"verbose", no_argument, NULL, 'v'},
@@ -64,6 +67,7 @@ static const struct option long_options[] = {
 
 static int unixexec_listen(const unixexec_state_t *up, const char *path,
                            size_t pathlen, mode_t mode);
+static int unixexec_connect(const char *path, size_t pathlen);
 static int unixexec_unlink(const unixexec_state_t *up, const char *path);
 static int setlocalenv(const char *path);
 static int setremoteenv(int fd);
@@ -82,12 +86,19 @@ int main(int argc, char *argv[]) {
   mode_t *set;
 
   up.unlink = 1;
+  up.listen_mode = 1;
 
   if ((set = setmode(DEFAULT_FILE_MODE)) == NULL)
     err(111, "setmode");
 
-  while ((ch = getopt_long(argc, argv, "+hUvm:", long_options, NULL)) != -1) {
+  while ((ch = getopt_long(argc, argv, "+clhUvm:", long_options, NULL)) != -1) {
     switch (ch) {
+    case 'c':
+        up.listen_mode = 0;
+        break;
+    case 'l':
+        up.listen_mode = 1;
+        break;
     case 'U':
       up.unlink = 0;
       break;
@@ -121,13 +132,18 @@ int main(int argc, char *argv[]) {
 
   mode = getmode(set, 0);
 
-  lfd = unixexec_listen(&up, path, strlen(path), mode);
-  if (lfd == -1)
-    err(111, "listen: %s", path);
-
-  fd = accept4(lfd, (struct sockaddr *)&sa, &salen, SOCK_CLOEXEC);
-  if (fd == -1)
-    err(111, "accept");
+  if (up.listen_mode) {
+    lfd = unixexec_listen(&up, path, strlen(path), mode);
+    if (lfd == -1)
+      err(111, "listen: %s", path);
+    fd = accept4(lfd, (struct sockaddr *)&sa, &salen, SOCK_CLOEXEC);
+    if (fd == -1)
+      err(111, "accept");
+  } else {
+    lfd = unixexec_connect(path, strlen(path));
+    if (lfd == -1)
+      err(111, "connect: %s", path);
+  }
 
   if (setlocalenv(path) == -1)
     err(111, "setlocalenv");
@@ -141,6 +157,32 @@ int main(int argc, char *argv[]) {
   (void)execvp(argv[1], argv + 1);
 
   err(errno == ENOENT ? 127 : 126, "%s", argv[1]);
+}
+
+static int unixexec_connect(const char *path, size_t pathlen) {
+  struct sockaddr_un sa = {0};
+  size_t salen;
+  int fd;
+
+  if (pathlen >= UNIX_PATH_MAX) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+
+  if (fd == -1)
+    return -1;
+
+  sa.sun_family = AF_UNIX;
+
+  (void)memcpy(sa.sun_path, path, pathlen);
+  salen = SUN_LEN(&sa);
+
+  if (connect(fd, (struct sockaddr *)&sa, salen) == -1)
+    return -1;
+
+  return fd;
 }
 
 static int unixexec_listen(const unixexec_state_t *up, const char *path,
@@ -301,9 +343,11 @@ static void usage(void) {
       stderr,
       "%s [OPTION] <SOCKETPATH> <COMMAND> <...>\n"
       "version: %s\n"
-      "-U, --no-unlink              do not unlink the socket before binding\n"
+      "-l, --listen                 listen mode. Default.\n"
+      "-c, --connect                connect mode.\n"
+      "-U, --no-unlink              (-l only). do not unlink the socket before binding\n"
       "-v, --verbose                write additional messages to stderr\n"
       "-h, --help                   usage summary\n"
-      "-m, --mode <mode>            Specify an alternate mode. (default=%s)\n",
+      "-m, --mode <mode>            (-l only). Specify an alternate mode. (default=%s)\n",
       __progname, UNIXEXEC_VERSION, DEFAULT_FILE_MODE);
 }
