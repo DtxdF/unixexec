@@ -79,8 +79,14 @@ make
 
 # OPTIONS
 
+-l, --listen
+: listen mode. Default.
+
+-c, --connect
+: connect mode. SOCKETPATH can be a socket or a character special file.
+
 -U, --no-unlink
-: do not unlink the socket before binding
+: (-l only). do not unlink the socket before binding
 
 -v, --verbose
 : write additional messages to stderr
@@ -89,7 +95,7 @@ make
 : usage summary
 
 -m, --mode
-: Specify an alternate mode. (default=0750)
+: (-l only). Specify an alternate mode. (default=0750)
 
 # ENVIRONMENT VARIABLES
 
