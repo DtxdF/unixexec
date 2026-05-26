@@ -137,6 +137,7 @@ int main(int argc, char *argv[]) {
     if (errno == ENOENT) {
       if (!up.listen_mode)
         err(111, "stat");
+      up.unlink = 0;
     } else {
       err(111, "stat");
     }
