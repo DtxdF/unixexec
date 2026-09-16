@@ -79,6 +79,9 @@ make
 
 # OPTIONS
 
+-D, --socket-dir
+: (FreeBSD only). Create SOCKETPATH relative to this directory without following symbolic links.
+
 -l, --listen
 : listen mode. Default.
 
@@ -101,6 +104,9 @@ make
 
 PROTO
 : protocol, always set to UNIX
+
+UNIXLOCALDIR
+: socket directory (see -D)
 
 UNIXLOCALPATH
 : socket path

@@ -55,10 +55,12 @@ typedef struct {
   int verbose;
   int unlink;
   int listen_mode;
+  int dfd;
   struct stat sbuf;
 } unixexec_state_t;
 
 static const struct option long_options[] = {
+    {"socket-dir", no_argument, NULL, 'D'},
     {"connect", no_argument, NULL, 'c'},
     {"listen", no_argument, NULL, 'l'},
     {"no-unlink", no_argument, NULL, 'U'},
@@ -72,29 +74,33 @@ static int unixexec_listen(const unixexec_state_t *up, const char *path,
                            size_t pathlen, mode_t mode);
 static int unixexec_connect(const unixexec_state_t *up, const char *path, size_t pathlen);
 static int unixexec_unlink(const unixexec_state_t *up, const char *path);
-static int setlocalenv(const char *path);
+static int setlocalenv(const char *socket_dir, const char *path);
 static int setremoteenv(int fd);
 static int setenvuint(const char *key, u_int64_t val);
 static void usage(void);
 
 int main(int argc, char *argv[]) {
   unixexec_state_t up = {0};
+  int sflag = 0;
+  int dfd;
   int lfd;
   int fd;
   struct sockaddr_storage sa = {0};
   socklen_t salen = sizeof(sa);
-  const char *path;
+  const char *path, *socket_dir;
   int ch;
   mode_t mode;
   mode_t *set;
 
   up.unlink = 1;
   up.listen_mode = 1;
+  up.dfd = -1;
+  socket_dir = NULL;
 
   if ((set = setmode(DEFAULT_FILE_MODE)) == NULL)
     err(111, "setmode");
 
-  while ((ch = getopt_long(argc, argv, "+clhUvm:", long_options, NULL)) != -1) {
+  while ((ch = getopt_long(argc, argv, "+clhUvD:m:", long_options, NULL)) != -1) {
     switch (ch) {
     case 'c':
       up.listen_mode = 0;
@@ -111,6 +117,9 @@ int main(int argc, char *argv[]) {
     case 'h':
       usage();
       exit(2);
+      break;
+    case 'D':
+      socket_dir = optarg;
       break;
     case 'm':
       free(set);
@@ -131,9 +140,24 @@ int main(int argc, char *argv[]) {
     exit(2);
   }
 
+  if (socket_dir != NULL) {
+#if !defined(__FreeBSD__)
+    errx(111, "-D is not supported on this platform.");
+#endif
+    if ((up.dfd = open(socket_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)) == -1)
+      err(111, "open");
+  }
+
   path = argv[0];
 
-  if (stat(path, &up.sbuf) == -1) {
+  if (up.dfd == -1) {
+      dfd = AT_FDCWD;
+  } else {
+      dfd = up.dfd;
+      sflag = AT_SYMLINK_NOFOLLOW;
+  }
+
+  if (fstatat(dfd, path, &up.sbuf, sflag) == -1) {
     if (errno == ENOENT) {
       if (!up.listen_mode)
         err(111, "stat");
@@ -162,7 +186,7 @@ int main(int argc, char *argv[]) {
       err(111, "setremoteenv");
   }
 
-  if (setlocalenv(path) == -1)
+  if (setlocalenv(socket_dir, path) == -1)
     err(111, "setlocalenv");
 
   if ((dup2(fd, STDOUT_FILENO) == -1) || (dup2(fd, STDIN_FILENO) == -1))
@@ -201,8 +225,18 @@ static int unixexec_connect(const unixexec_state_t *up, const char *path, size_t
     (void)memcpy(sa.sun_path, path, pathlen);
     salen = SUN_LEN(&sa);
 
+#if defined(__FreeBSD__)
+  if (up->dfd == -1) {
     if (connect(fd, (struct sockaddr *)&sa, salen) == -1)
       return -1;
+  } else {
+    if (connectat(up->dfd, fd, (struct sockaddr *)&sa, salen) == -1)
+      return -1;
+  }
+#else
+    if (connect(fd, (struct sockaddr *)&sa, salen) == -1)
+      return -1;
+#endif
 
     return fd;
   }
@@ -235,12 +269,24 @@ static int unixexec_listen(const unixexec_state_t *up, const char *path,
   if (fchmod(fd, mode) == -1)
     return -1;
 
+#if defined(__FreeBSD__)
+  if (up->dfd == -1) {
+    if (bind(fd, (struct sockaddr *)&sa, salen) == -1)
+      return -1;
+  } else {
+    if (bindat(up->dfd, fd, (struct sockaddr *)&sa, salen) == -1)
+      return -1;
+  }
+#else
   if (bind(fd, (struct sockaddr *)&sa, salen) == -1)
     return -1;
+#endif
 
   if (listen(fd, 1) == -1) {
     int errnum = errno;
     (void)close(fd);
+    if (up->dfd != -1)
+      (void)close(up->dfd);
     errno = errnum;
     return -1;
   }
@@ -257,10 +303,17 @@ static int unixexec_unlink(const unixexec_state_t *up, const char *path) {
     return -1;
   }
 
+#if defined(__FreeBSD__)
+  if (up->dfd == -1)
+    return unlink(path);
+  else
+    return unlinkat(up->dfd, path, 0);
+#else
   return unlink(path);
+#endif
 }
 
-static int setlocalenv(const char *path) {
+static int setlocalenv(const char *socket_dir, const char *path) {
   struct passwd *pw;
 
   if (path == NULL)
@@ -268,6 +321,11 @@ static int setlocalenv(const char *path) {
 
   if (setenv("PROTO", "UNIX", 1) == -1)
     return -1;
+
+  if (socket_dir != NULL) {
+    if (setenv("UNIXLOCALDIR", socket_dir, 1) == -1)
+      return -1;
+  }
 
   if (setenv("UNIXLOCALPATH", path, 1) == -1)
     return -1;
@@ -361,6 +419,8 @@ static void usage(void) {
       stderr,
       "%s [OPTION] <SOCKETPATH> <COMMAND> <...>\n"
       "version: %s\n"
+      "-D, --socket-dir             (FreeBSD only). Create <SOCKETPATH> relative to this\n"
+      "                             directory without following symbolic links.\n"
       "-l, --listen                 listen mode. Default.\n"
       "-c, --connect                connect mode.\n"
       "                             <SOCKETPATH> can be a socket or a character special file.\n"
