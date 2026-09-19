@@ -41,7 +41,7 @@
 
 #include <pwd.h>
 
-#define UNIXEXEC_VERSION "0.5.1"
+#define UNIXEXEC_VERSION "0.6.0"
 
 #ifndef UNIX_PATH_MAX
 #define UNIX_PATH_MAX (sizeof(((struct sockaddr_un *)0)->sun_path))
